@@ -1,0 +1,137 @@
+name: Release Controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'PHP Version to Release (e.g. 8.4.3)'
+        required: true
+        default: '8.4.3'
+      is_prerelease:
+        description: 'Mark as Pre-release?'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # REQUIRED to create Releases and push manifest.json
+
+jobs:
+  # 1. CALL THE BUILD WORKFLOWS
+  call-linux:
+    uses: ./.github/workflows/linux.yml
+    with:
+      php_version: ${{ inputs.php_version }}
+      
+  call-macos:
+    uses: ./.github/workflows/mac.yml
+    with:
+      php_version: ${{ inputs.php_version }}
+
+  call-windows:
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      php_version: ${{ inputs.php_version }}
+
+  # 2. PUBLISH & UPDATE MANIFEST
+  publish:
+    needs: [call-linux, call-macos, call-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Download artifacts from the CALLED workflows
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate Checksums
+        id: checksums
+        run: |
+          cd dist
+          ls -lh
+          # Calculate SHA256 for all files
+          sha256sum * > checksums.txt
+          
+          # Print for logs
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: php-${{ inputs.php_version }}
+          name: PHP ${{ inputs.php_version }}
+          body_path: dist/checksums.txt
+          files: dist/*
+          prerelease: ${{ inputs.is_prerelease }}
+
+      - name: Update manifest.json
+        run: |
+          # 1. Setup Variables
+          VER="${{ inputs.php_version }}"
+          DATE="$(date -u +%Y-%m-%d)"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/php-$VER"
+          
+          # 2. Get Hashes (Helper function)
+          get_hash() {
+            grep "$1" dist/checksums.txt | awk '{print $1}'
+          }
+
+          # 3. Define Filenames
+          LINUX_X64="php-$VER-fpm-linux-x64.tar.gz"
+          LINUX_ARM="php-$VER-fpm-linux-arm64.tar.gz"  # 👈 Added this
+          MAC_FILE="php-$VER-macos-arm64.tar.gz"
+          WIN_FILE="php-$VER-windows-x64.zip"
+
+          # 4. Create/Update JSON
+          if [ ! -f manifest.json ]; then echo '{"versions":{}}' > manifest.json; fi
+          
+          # 5. Use JQ to insert ALL platforms safely
+          jq --arg ver "$VER" \
+             --arg date "$DATE" \
+             --arg l_x64_url "$BASE_URL/$LINUX_X64" \
+             --arg l_x64_sum "$(get_hash $LINUX_X64)" \
+             --arg l_arm_url "$BASE_URL/$LINUX_ARM" \
+             --arg l_arm_sum "$(get_hash $LINUX_ARM)" \
+             --arg m_arm_url "$BASE_URL/$MAC_FILE" \
+             --arg m_arm_sum "$(get_hash $MAC_FILE)" \
+             --arg w_x64_url "$BASE_URL/$WIN_FILE" \
+             --arg w_x64_sum "$(get_hash $WIN_FILE)" \
+             '.versions[$ver] = {
+               release_date: $date,
+               platforms: {
+                 "linux-x64": { 
+                    url: $l_x64_url, 
+                    checksum: $l_x64_sum, 
+                    bin: "opt/php/bin/php" 
+                 },
+                 "linux-aarch64": { 
+                    url: $l_arm_url, 
+                    checksum: $l_arm_sum, 
+                    bin: "opt/php/bin/php" 
+                 },
+                 "darwin-aarch64": { 
+                    url: $m_arm_url, 
+                    checksum: $m_arm_sum, 
+                    bin: "runtime/bin/php" 
+                 },
+                 "windows-x86_64": { 
+                    url: $w_x64_url, 
+                    checksum: $w_x64_sum, 
+                    bin: "bin/php.exe" 
+                 }
+               }
+             }' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
+
+          # 6. Debug
+          cat manifest.json
+
+      - name: Commit & Push Manifest
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add manifest.json
+          git commit -m "Update manifest for PHP ${{ inputs.php_version }}"
+          git push

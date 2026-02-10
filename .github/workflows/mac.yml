@@ -1,0 +1,222 @@
+name: Package PHP (macOS Homebrew)
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'PHP version (e.g. 8.4.3)'
+        required: true
+        default: '8.4.3'
+  workflow_call:
+    inputs:
+      php_version:
+        description: 'PHP version'
+        required: true
+        type: string
+
+jobs:
+  package-macos:
+    runs-on: macos-14 # Uses M1/M2/M3 (ARM64) runners
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------
+      # 1. SETUP & INSTALL
+      # ---------------------------------------------------------
+      - name: Calculate Version & Install
+        id: setup
+        run: |
+          FULL_VER="${{ inputs.php_version }}"
+          FORMULA_VER=$(echo "$FULL_VER" | cut -d. -f1,2)
+          FORMULA_NAME="php@$FORMULA_VER"
+
+          echo "Full Version: $FULL_VER"
+          echo "Homebrew Formula: $FORMULA_NAME"
+          
+          echo "PHP_FORMULA=$FORMULA_NAME" >> $GITHUB_ENV
+          
+          brew update
+          brew install $FORMULA_NAME
+          brew link --overwrite $FORMULA_NAME
+
+      # ---------------------------------------------------------
+      # 2. PREPARE DIRECTORY STRUCTURE
+      # ---------------------------------------------------------
+      - name: Prepare runtime structure
+        run: |
+          mkdir -p runtime/bin runtime/lib runtime/etc runtime/var/log runtime/tmp
+          
+          PHP_PREFIX="$(brew --prefix ${{ env.PHP_FORMULA }})"
+          
+          cp "$PHP_PREFIX/bin/php" runtime/bin/
+          # Copy php-fpm if it exists
+          [ -f "$PHP_PREFIX/sbin/php-fpm" ] && cp "$PHP_PREFIX/sbin/php-fpm" runtime/bin/
+          
+          chmod +x runtime/bin/*
+
+      # ---------------------------------------------------------
+      # 3. COPY EXTENSIONS (DYNAMIC ONLY)
+      # ---------------------------------------------------------
+      - name: Copy PHP extensions
+        run: |
+          PHP_PREFIX="$(brew --prefix ${{ env.PHP_FORMULA }})"
+          PHP_CONFIG="$PHP_PREFIX/bin/php-config"
+          
+          # Get extension dir
+          EXT_DIR=$("$PHP_CONFIG" --extension-dir)
+          
+          mkdir -p runtime/lib/php/extensions
+          
+          # Only copy if files exist. Since your build is mostly static,
+          # this might copy nothing, which is FINE.
+          if [ -d "$EXT_DIR" ]; then
+             cp "$EXT_DIR"/*.so runtime/lib/php/extensions/ 2>/dev/null || echo "No .so files found (Static build detected)"
+          fi
+
+      # ---------------------------------------------------------
+      # 4. COPY DEPENDENCIES (DYLIBS)
+      # ---------------------------------------------------------
+      - name: Copy dependencies recursively
+        run: |
+          LIB_DIR="runtime/lib"
+          
+          copy_libs() {
+            local search_path="$1"
+            find "$search_path" -type f \( -perm +111 -o -name "*.so" -o -name "*.dylib" \) | while read bin; do
+              otool -L "$bin" | awk '{print $1}' | grep -E "/opt/homebrew|/usr/local" | while read lib; do
+                local base="$(basename "$lib")"
+                if [ ! -f "$LIB_DIR/$base" ]; then
+                  cp "$lib" "$LIB_DIR/$base"
+                  chmod 755 "$LIB_DIR/$base"
+                fi
+              done
+            done
+          }
+
+          prev_count=0
+          current_count=$(ls runtime/lib | wc -l)
+          
+          while [ "$current_count" -gt "$prev_count" ]; do
+            copy_libs "runtime/bin"
+            copy_libs "runtime/lib"
+            prev_count=$current_count
+            current_count=$(ls runtime/lib | wc -l)
+          done
+
+      # ---------------------------------------------------------
+      # 5. RELINK BINARIES
+      # ---------------------------------------------------------
+      - name: Relink and Sign
+        run: |
+          for lib in runtime/lib/*.dylib; do
+             [ -f "$lib" ] || continue
+             install_name_tool -id "@rpath/$(basename "$lib")" "$lib"
+          done
+
+          find runtime -type f | while read file; do
+            if file "$file" | grep -q "Mach-O"; then
+               install_name_tool -add_rpath "@executable_path/../lib" "$file" 2>/dev/null || true
+               
+               otool -L "$file" | grep -E "/opt/homebrew|/usr/local" | awk '{print $1}' | while read dep; do
+                 base=$(basename "$dep")
+                 install_name_tool -change "$dep" "@rpath/$base" "$file"
+               done
+               
+               codesign --force --sign - "$file"
+            fi
+          done
+
+      # ---------------------------------------------------------
+      # 6. CONFIGURE PHP.INI
+      # ---------------------------------------------------------
+      - name: Create and Configure php.ini
+        run: |
+          echo "; Custom Portable PHP Build" > runtime/etc/php.ini
+          
+          cat >> runtime/etc/php.ini << 'EOF'
+          memory_limit=512M
+          max_execution_time=300
+          upload_max_filesize=100M
+          post_max_size=100M
+          display_errors=On
+          sys_temp_dir="${PWD}/../tmp"
+          extension_dir="../lib/php/extensions"
+          EOF
+
+          # DYNAMIC DISCOVERY:
+          # Only adds 'extension=' lines if the .so file is actually there.
+          # Since your log showed most are static, this loop will likely add nothing,
+          # avoiding "Module already loaded" errors.
+          for so in runtime/lib/php/extensions/*.so; do
+            [ -f "$so" ] || continue
+            ext_name=$(basename "$so" .so)
+            
+            if [ "$ext_name" == "opcache" ]; then
+               echo "zend_extension=$ext_name" >> runtime/etc/php.ini
+            else
+               echo "extension=$ext_name" >> runtime/etc/php.ini
+            fi
+          done
+          
+          # Always add Opcache config (it's built-in statically, but needs config)
+          cat >> runtime/etc/php.ini << 'EOF'
+          [opcache]
+          opcache.enable=1
+          opcache.enable_cli=1
+          opcache.memory_consumption=256
+          opcache.interned_strings_buffer=16
+          opcache.max_accelerated_files=10000
+          EOF
+
+      # ---------------------------------------------------------
+      # 7. VERIFICATION (FIXED)
+      # ---------------------------------------------------------
+      - name: Verify Extensions
+        run: |
+          echo "Running Smoke Test..."
+          
+          REQUIRED_EXTS="bcmath bz2 calendar curl gd intl mbstring mysqli opcache pdo_mysql pdo_sqlite pgsql zip sodium"
+          
+          LOADED_MODULES=$(env -i PATH="/usr/bin:/bin" "runtime/bin/php" -c "runtime/etc/php.ini" -m)
+          
+          echo "--- Loaded Modules ---"
+          echo "$LOADED_MODULES"
+          echo "----------------------"
+          
+          MISSING=0
+          for EXT in $REQUIRED_EXTS; do
+            # Special check for Opcache because PHP reports it as "Zend OPcache"
+            CHECK_NAME="$EXT"
+            if [ "$EXT" == "opcache" ]; then
+               CHECK_NAME="Zend OPcache"
+            fi
+            
+            # Grep logic: 
+            # -F: Fixed string (no regex)
+            # -i: Case insensitive
+            if echo "$LOADED_MODULES" | grep -Fiq "$CHECK_NAME"; then
+               echo "✅ $EXT is loaded (found '$CHECK_NAME')"
+            else
+               echo "❌ $EXT is MISSING!"
+               MISSING=1
+            fi
+          done
+          
+          if [ "$MISSING" -eq 1 ]; then
+             echo "::error::Some required extensions are missing."
+             exit 1
+          fi
+
+      # ---------------------------------------------------------
+      # 8. PACKAGE
+      # ---------------------------------------------------------
+      - name: Package runtime
+        run: |
+          tar -czf php-${{ inputs.php_version }}-macos-arm64.tar.gz runtime
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ inputs.php_version }}-macos-arm64
+          path: php-${{ inputs.php_version }}-macos-arm64.tar.gz

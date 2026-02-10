@@ -1,0 +1,183 @@
+name: Build PHP (Linux)
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'PHP version (e.g. 8.3.2)'
+        required: true
+        default: '8.3.2'
+        
+  workflow_call:
+      inputs:
+        php_version:
+          description: 'PHP version'
+          required: true
+          type: string
+          
+jobs:
+  build-linux:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x64 build on standard Ubuntu runner
+          - runner: ubuntu-latest
+            arch: x64
+            
+          # ARM64 build on native ARM64 runner
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config autoconf automake libtool bison re2c \
+            libxml2-dev libssl-dev libcurl4-openssl-dev libsqlite3-dev \
+            libonig-dev libzip-dev libpng-dev libjpeg-dev libfreetype6-dev \
+            libpq-dev libreadline-dev libbz2-dev libgmp-dev libicu-dev \
+            libsodium-dev libargon2-dev libtidy-dev libxslt1-dev
+      
+      - name: Download PHP
+        run: |
+          curl -LO https://www.php.net/distributions/php-${{ inputs.php_version }}.tar.gz
+          tar -xzf php-${{ inputs.php_version }}.tar.gz
+      
+      - name: Configure PHP
+        run: |
+          cd php-${{ inputs.php_version }}
+          
+          ./configure \
+            --prefix=/opt/php \
+            --enable-fpm \
+            --with-fpm-user=www-data \
+            --with-fpm-group=www-data \
+            --enable-cli \
+            --enable-bcmath \
+            --enable-calendar \
+            --enable-exif \
+            --enable-ftp \
+            --enable-gd \
+            --enable-intl \
+            --enable-mbstring \
+            --enable-opcache \
+            --enable-pcntl \
+            --enable-shmop \
+            --enable-soap \
+            --enable-sockets \
+            --with-bz2 \
+            --with-curl \
+            --with-openssl \
+            --with-password-argon2 \
+            --with-pdo-mysql \
+            --with-pdo-pgsql \
+            --with-pdo-sqlite \
+            --with-pgsql \
+            --with-readline \
+            --with-sodium \
+            --with-zip \
+            --with-zlib \
+            --with-mysqli \
+            --with-gettext \
+            --with-xsl \
+            --with-tidy \
+            --enable-dom \
+            --enable-xml \
+            --enable-simplexml \
+            --enable-xmlreader \
+            --enable-xmlwriter \
+            --enable-phar \
+            --enable-fileinfo \
+            --enable-filter \
+            --enable-tokenizer \
+            --enable-session \
+            --enable-posix \
+            --enable-ctype
+      
+      - name: Build PHP
+        run: |
+          cd php-${{ inputs.php_version }}
+          make -j$(nproc)
+      
+      - name: Install PHP
+        run: |
+          cd php-${{ inputs.php_version }}
+          mkdir -p build/opt
+          make install INSTALL_ROOT=$PWD/build
+      
+      - name: Create php.ini
+        run: |
+          cd php-${{ inputs.php_version }}/build/opt/php
+          
+          # Copy recommended php.ini
+          cp ../../../php.ini-production lib/php.ini
+          
+          # Enable commonly used extensions
+          cat >> lib/php.ini << 'EOF'
+          
+            ; Extension settings
+            extension=bcmath
+            extension=bz2
+            extension=calendar
+            extension=curl
+            extension=dom
+            extension=exif
+            extension=fileinfo
+            extension=ftp
+            extension=gd
+            extension=gettext
+            extension=gmp
+            extension=intl
+            extension=mbstring
+            extension=mysqli
+            extension=opcache
+            extension=pdo_mysql
+            extension=pdo_pgsql
+            extension=pdo_sqlite
+            extension=pgsql
+            extension=phar
+            extension=posix
+            extension=readline
+            extension=session
+            extension=shmop
+            extension=simplexml
+            extension=soap
+            extension=sockets
+            extension=sodium
+            extension=sqlite3
+            extension=tokenizer
+            extension=xml
+            extension=xmlreader
+            extension=xmlwriter
+            extension=xsl
+            extension=zip
+            extension=zlib
+
+            ; Opcache settings
+            opcache.enable=1
+            opcache.memory_consumption=256
+            opcache.interned_strings_buffer=16
+            opcache.max_accelerated_files=10000
+            opcache.revalidate_freq=2
+
+            ; Performance settings
+            max_execution_time=300
+            memory_limit=512M
+            upload_max_filesize=100M
+            post_max_size=100M
+            EOF
+      
+      - name: Package
+        run: |
+          cd php-${{ inputs.php_version }}/build
+          tar -czf php-${{ inputs.php_version }}-fpm-linux-${{ matrix.arch }}.tar.gz opt/
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ inputs.php_version }}-linux-${{ matrix.arch }}
+          path: php-${{ inputs.php_version }}/build/*.tar.gz

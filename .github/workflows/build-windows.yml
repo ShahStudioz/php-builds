@@ -1,0 +1,91 @@
+name: Package PHP (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_version:
+        description: 'Full PHP version (e.g. 8.4.3)'
+        required: true
+        default: '8.4.3'
+        
+  workflow_call:
+      inputs:
+        php_version:
+          description: 'PHP version'
+          required: true
+          type: string
+          
+jobs:
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download PHP (Windows)
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.php_version }}"
+          
+          # 1. Determine VS Version (VS16 vs VS17)
+          # PHP 8.4+ uses VS17. Older 8.x uses VS16.
+          $majorMinor = $version -replace "\.\d+$","" 
+          if ([version]$majorMinor -ge [version]"8.4") {
+              $vs = "vs17"
+          } else {
+              $vs = "vs16"
+          }
+
+          $filename = "php-$version-nts-Win32-$vs-x64.zip"
+          $url = "https://windows.php.net/downloads/releases/$filename"
+          
+          Write-Host "Downloading $filename..."
+          try {
+              Invoke-WebRequest -Uri $url -OutFile "php.zip"
+          } catch {
+              $url = "https://windows.php.net/downloads/releases/archives/$filename"
+              Write-Host "Trying archive: $url"
+              Invoke-WebRequest -Uri $url -OutFile "php.zip"
+          }
+
+          # 2. Extract and DELETE the original zip to avoid confusion
+          Expand-Archive php.zip -DestinationPath php-temp
+          Remove-Item "php.zip"
+
+      - name: Configure & Repackage
+        shell: pwsh
+        run: |
+          # Create clean structure
+          New-Item -ItemType Directory -Force -Path "build/bin"
+          
+          # Move files
+          Get-ChildItem -Path "php-temp/*" | Move-Item -Destination "build/bin"
+          
+          # Setup php.ini
+          if (Test-Path "build/bin/php.ini-production") {
+              Copy-Item "build/bin/php.ini-production" "build/bin/php.ini"
+          } else {
+              Copy-Item "build/bin/php.ini-development" "build/bin/php.ini"
+          }
+          
+          # Enable extensions
+          $iniPath = "build/bin/php.ini"
+          $ini = Get-Content $iniPath
+          $ini = $ini -replace ';?extension_dir\s*=\s*"ext"', 'extension_dir = "ext"'
+          $ini = $ini -replace ';?extension_dir\s*=\s*"\./"', 'extension_dir = "ext"'
+          
+          $exts = @("curl", "fileinfo", "gd", "mbstring", "openssl", "pdo_mysql", "pdo_sqlite", "sockets", "sqlite3", "zip")
+          foreach ($ext in $exts) {
+              $ini = $ini -replace ";extension=$ext", "extension=$ext"
+          }
+          $ini | Set-Content $iniPath
+
+          # 3. Create the final Zip
+          Compress-Archive -Path "build/*" -DestinationPath "php-${{ inputs.php_version }}-windows-x64.zip"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ inputs.php_version }}-windows-x64
+          # STRICTLY upload only the final filename
+          path: "php-${{ inputs.php_version }}-windows-x64.zip"
