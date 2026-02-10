@@ -49,6 +49,31 @@
           "bin": "bin/php.exe"
         }
       }
+    },
+    "8.3.29": {
+      "release_date": "2026-02-10",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.3.29/php-8.3.29-fpm-linux-x64.tar.gz",
+          "checksum": "7233a733d47f7b470eb79359b3c0dbf3c293fa277a9c05e72da263eb65e6ac1c",
+          "bin": "opt/php/bin/php"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.3.29/php-8.3.29-fpm-linux-arm64.tar.gz",
+          "checksum": "1c531fd8d66481a50175731469e98884d40ea59f590785d6228eabf64bca8175",
+          "bin": "opt/php/bin/php"
+        },
+        "darwin-aarch64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.3.29/php-8.3.29-macos-arm64.tar.gz",
+          "checksum": "3fa69247a2adbafded94db9d52ffe53577118939c546dbeb4a0f5302d5262a97",
+          "bin": "runtime/bin/php"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.3.29/php-8.3.29-windows-x64.zip",
+          "checksum": "b3974a128d408778d5b7cade0dc8461ff3aefa7f828bacdfee9bec8793231eb2",
+          "bin": "bin/php.exe"
+        }
+      }
     }
   }
 }
