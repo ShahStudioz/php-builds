@@ -24,6 +24,31 @@
           "bin": "bin/php.exe"
         }
       }
+    },
+    "8.2.30": {
+      "release_date": "2026-02-10",
+      "platforms": {
+        "linux-x64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.2.30/php-8.2.30-fpm-linux-x64.tar.gz",
+          "checksum": "dbcbdd20054b23c88a68300741c2877bc33bad1de5ff57802e9c3799ba8aeadb",
+          "bin": "opt/php/bin/php"
+        },
+        "linux-aarch64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.2.30/php-8.2.30-fpm-linux-arm64.tar.gz",
+          "checksum": "f6af02fbfecc9fb6e0a1074eb781d8367ea655e836d41d0b5105e1e4b6f86ec9",
+          "bin": "opt/php/bin/php"
+        },
+        "darwin-aarch64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.2.30/php-8.2.30-macos-arm64.tar.gz",
+          "checksum": "ad059a4a94e725021bd0ec3931a60aa2ed5416f62398b0c5411853ec4e217858",
+          "bin": "runtime/bin/php"
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/ShahStudioz/php-builds/releases/download/php-8.2.30/php-8.2.30-windows-x64.zip",
+          "checksum": "370ed8eece4051c144bbef7e8b28f7b5b88d40a22d9ff4d4c750f6f5453d9b22",
+          "bin": "bin/php.exe"
+        }
+      }
     }
   }
 }
